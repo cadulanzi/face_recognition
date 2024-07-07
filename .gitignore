@@ -129,6 +129,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+config.ini
 
 # Spyder project settings
 .spyderproject
@@ -165,4 +166,4 @@ cython_debug/
 .DS_Store
 
 # application
-db/**/*config.ini
+db/**/*
