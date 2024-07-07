@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: main.py with webcam",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": ["--use-webcam"],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: main.py with IP cameras",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [],
+            "console": "integratedTerminal"
+        }
+    ]
+}

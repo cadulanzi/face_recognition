@@ -9,6 +9,11 @@ import csv
 import subprocess
 import logging
 import sys
+import argparse
+from datetime import datetime
+
+# Configurar o logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 from config import Config
 
@@ -91,18 +96,47 @@ def get_camera_frames(camera_info, frame_queue, use_webcam=False):
     while True:
         ret, frame = cap.read()
         if ret:
-            frame_queue.put(frame)
+            frame_queue.put((frame, camera_info.get('ip', 'webcam')))
         else:
             break
     cap.release()
 
+def send_notification(name, camera_ip, face_location, frame):
+    headers = {
+        'Content-Type': 'application/json',
+        'x-api-key': config.token_facial_api
+    }
+    data = {
+        "Wanted": {
+            "name": name,
+            "gender": "Desconhecido",
+            "face": "Desconhecido",
+            "nickname": "Desconhecido",
+            "race": "Desconhecido",
+            "age": "Desconhecido",
+            "social_number": "Desconhecido",
+            "birthday": None,
+            "id": "Desconhecido"
+        },
+        "camera_ip": camera_ip,
+        "time_of_capture": datetime.utcnow().isoformat(),
+        "face_location": face_location,
+        "frame": np.array(frame).tolist(),
+        "canonical": "Desconhecido",
+        "confidence": 60.1
+    }
+    response = requests.post(config.url_facial_api, headers=headers, json=data)
+    if response.status_code == 200:
+        logging.info(f"Notification sent successfully for {name}")
+    else:
+        logging.error(f"Failed to send notification for {name}. Status code: {response.status_code}")
 
 def recognize_faces(frame_queue, known_face_encodings, known_face_names):
     process_this_frame = True
 
     while True:
         if not frame_queue.empty():
-            frame = frame_queue.get()
+            frame, camera_ip = frame_queue.get()
 
             # Only process every other frame of video to save time
             if process_this_frame:
@@ -129,6 +163,11 @@ def recognize_faces(frame_queue, known_face_encodings, known_face_names):
                         name = known_face_names[best_match_index]
 
                     face_names.append(name)
+
+                    # Log e enviar notificação quando um rosto é reconhecido
+                    if name != "Unknown" and name in known_face_names:
+                        logging.info(f"Recognized {name} from the wanted list.")
+                        send_notification(name, camera_ip, face_locations[0], frame)
 
             process_this_frame = not process_this_frame
 
@@ -168,48 +207,47 @@ def load_known_faces():
                 rgb_small_frame = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 
                 encodings = face_recognition.face_encodings(rgb_small_frame)
-                if encodings:  # Ensure encodings is not empty
+                if encodings:
                     known_face_encodings.append(encodings[0])
-                    known_face_names.append(file.split('.')[0])  # Use the file name as the person's name
+                    known_face_names.append(file.split('.')[0])
     return known_face_encodings, known_face_names
 
-
 def main():
-    try:
-        headers = {
-            'Content-Type': 'application/json',
-            'x-api-key': config.token_facial_api
-        }
+    parser = argparse.ArgumentParser(description='Face Recognition System')
+    parser.add_argument('--use-webcam', action='store_true', help='Use webcam instead of IP cameras')
+    args = parser.parse_args()
 
-        # wanted_list = fetch_wanted_list()
-        # download_images(wanted_list)
+    try:
+        if not args.use_webcam:
+            headers = {
+                'Content-Type': 'application/json',
+                'x-api-key': config.token_facial_api
+            }
+            wanted_list = fetch_wanted_list()
+            download_images(wanted_list)
+
         known_face_encodings, known_face_names = load_known_faces()
 
-        # camera_list = fetch_data(config.url_facial_api, "/camera/list", headers)
-        camera_list = []
         frame_queue = Queue()
-
         processes = []
-        
-        # Adicione uma câmera fictícia para a webcam
-        webcam_info = {
-            'user': '',
-            'password': '',
-            'ip': ''
-        }
-        
-        # Adiciona a webcam à lista de processos de captura de câmera
-        p = Process(target=get_camera_frames, args=(webcam_info, frame_queue, True))
-        p.start()
-        processes.append(p)
 
-        # Processos para câmeras IP
-        for camera_info in camera_list:
-            p = Process(target=get_camera_frames, args=(camera_info, frame_queue))
+        if args.use_webcam:
+            webcam_info = {
+                'user': '',
+                'password': '',
+                'ip': ''
+            }
+            p = Process(target=get_camera_frames, args=(webcam_info, frame_queue, True))
             p.start()
             processes.append(p)
+        else:
+            camera_list = fetch_data(config.url_facial_api, "/camera/list", headers)
+            for camera_info in camera_list:
+                p = Process(target=get_camera_frames, args=(camera_info, frame_queue))
+                p.start()
+                processes.append(p)
 
-        for _ in range(len(camera_list) + 1):  # Inclui a webcam
+        for _ in range(len(processes)):
             p = Process(target=recognize_faces, args=(frame_queue, known_face_encodings, known_face_names))
             p.start()
             processes.append(p)
@@ -218,7 +256,7 @@ def main():
             p.join()
 
     except Exception as e:
-        print(f"Error: {e}")
+        logging.error(f"Error: {e}")
 
 if __name__ == '__main__':
     main()
