@@ -11,6 +11,7 @@ import logging
 import sys
 import argparse
 from datetime import datetime, timedelta
+from collections import deque
 
 # Configurar o logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -123,10 +124,11 @@ def send_notification(name, camera_ip, face_location, frame):
     else:
         logging.error(f"Failed to send notification for {name}. Status code: {response.status_code}")
 
-def recognize_faces(frame_queue, known_face_encodings, known_face_names, camera_ip):
+def recognize_faces(frame_queue, known_face_encodings, known_face_names, camera_ip, tolerance=0.4):
     process_this_frame = True
     last_alert_time = datetime.min  # Initialize the last alert time to the minimum datetime value
     alert_interval = timedelta(seconds=10)  # Minimum interval between alerts
+    recent_recognitions = deque(maxlen=5)  # Cache for recent recognitions to avoid flooding
 
     while True:
         if not frame_queue.empty():
@@ -136,65 +138,51 @@ def recognize_faces(frame_queue, known_face_encodings, known_face_names, camera_
 
             # Only process every other frame of video to save time
             if process_this_frame:
-                # Resize frame of video to 1/4 size for faster face recognition processing
                 small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-
-                # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
                 rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-                
-                # Find all the faces and face encodings in the current frame of video
                 face_locations = face_recognition.face_locations(rgb_small_frame)
                 face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
 
                 face_names = []
                 for face_encoding in face_encodings:
-                    # See if the face is a match for the known face(s)
-                    matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+                    matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance)
                     name = "Unknown"
-
-                    # Or instead, use the known face with the smallest distance to the new face
                     face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
                     best_match_index = np.argmin(face_distances)
                     if matches[best_match_index]:
                         name = known_face_names[best_match_index]
-
                     face_names.append(name)
 
-                    # Log e enviar notificação quando um rosto é reconhecido, mas não em excesso
                     if name != "Unknown" and name in known_face_names:
                         current_time = datetime.utcnow()
-                        if current_time - last_alert_time > alert_interval:
+                        # Check if this recognition was recently processed
+                        if name not in recent_recognitions and current_time - last_alert_time > alert_interval:
                             logging.info(f"Recognized {name} from the wanted list.")
                             send_notification(name, camera_ip, face_locations[0], frame)
                             last_alert_time = current_time
+                            recent_recognitions.append(name)
 
             process_this_frame = not process_this_frame
 
-            # Display the results
             for (top, right, bottom, left), name in zip(face_locations, face_names):
-                # Scale back up face locations since the frame we detected in was scaled to 1/4 size
                 top *= 4
                 right *= 4
                 bottom *= 4
                 left *= 4
-
-                # Draw a box around the face
                 box_color = (0, 255, 0) if name != "Unknown" and name in known_face_names else (0, 0, 255)
                 cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
-
-                # Draw a label with a name below the face
                 cv2.rectangle(frame, (left, bottom - 35), (right, bottom), box_color, cv2.FILLED)
                 font = cv2.FONT_HERSHEY_DUPLEX
                 cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
 
             # Display the resulting image
-            cv2.imshow('Cam from ' + camera_ip, frame)
+            cv2.imshow('Cam from ' + camera_ip, frame) # Comentar se imshow não for usado
 
             # Hit 'q' on the keyboard to quit!
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-    cv2.destroyAllWindows()
+    cv2.destroyAllWindows()  # Comentar se imshow não for usado
 
 def load_known_faces():
     known_face_encodings = []
