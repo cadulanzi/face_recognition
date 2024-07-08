@@ -176,13 +176,13 @@ def recognize_faces(frame_queue, known_face_encodings, known_face_names, camera_
                 cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
 
             # Display the resulting image
-            cv2.imshow('Cam from ' + camera_ip, frame) # Comentar se imshow não for usado
+            cv2.imshow('Cam from ' + camera_ip, frame) # Comment if the image is not necessary to be displayed
 
             # Hit 'q' on the keyboard to quit!
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-    cv2.destroyAllWindows()  # Comentar se imshow não for usado
+    cv2.destroyAllWindows()  # Comment if the imshow window is not necessary
 
 def load_known_faces():
     known_face_encodings = []
