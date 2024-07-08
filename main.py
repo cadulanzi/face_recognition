@@ -4,13 +4,13 @@ import cv2
 import os
 import face_recognition
 import numpy as np
-from multiprocessing import Process, Queue, current_process
+from multiprocessing import Process, Queue
 import csv
 import subprocess
 import logging
 import sys
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Configurar o logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -108,14 +108,6 @@ def send_notification(name, camera_ip, face_location, frame):
     }
     data = {
         "Wanted": {
-            "name": name,
-            "gender": "Desconhecido",
-            "face": "Desconhecido",
-            "nickname": "Desconhecido",
-            "race": "Desconhecido",
-            "age": "Desconhecido",
-            "social_number": "Desconhecido",
-            "birthday": None,
             "id": "Desconhecido"
         },
         "camera_ip": camera_ip,
@@ -131,12 +123,16 @@ def send_notification(name, camera_ip, face_location, frame):
     else:
         logging.error(f"Failed to send notification for {name}. Status code: {response.status_code}")
 
-def recognize_faces(frame_queue, known_face_encodings, known_face_names):
+def recognize_faces(frame_queue, known_face_encodings, known_face_names, camera_ip):
     process_this_frame = True
+    last_alert_time = datetime.min  # Initialize the last alert time to the minimum datetime value
+    alert_interval = timedelta(seconds=10)  # Minimum interval between alerts
 
     while True:
         if not frame_queue.empty():
-            frame, camera_ip = frame_queue.get()
+            frame, cam_ip = frame_queue.get()
+            if cam_ip != camera_ip:
+                continue
 
             # Only process every other frame of video to save time
             if process_this_frame:
@@ -164,10 +160,13 @@ def recognize_faces(frame_queue, known_face_encodings, known_face_names):
 
                     face_names.append(name)
 
-                    # Log e enviar notificação quando um rosto é reconhecido
+                    # Log e enviar notificação quando um rosto é reconhecido, mas não em excesso
                     if name != "Unknown" and name in known_face_names:
-                        logging.info(f"Recognized {name} from the wanted list.")
-                        send_notification(name, camera_ip, face_locations[0], frame)
+                        current_time = datetime.utcnow()
+                        if current_time - last_alert_time > alert_interval:
+                            logging.info(f"Recognized {name} from the wanted list.")
+                            send_notification(name, camera_ip, face_locations[0], frame)
+                            last_alert_time = current_time
 
             process_this_frame = not process_this_frame
 
@@ -180,15 +179,16 @@ def recognize_faces(frame_queue, known_face_encodings, known_face_names):
                 left *= 4
 
                 # Draw a box around the face
-                cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
+                box_color = (0, 255, 0) if name != "Unknown" and name in known_face_names else (0, 0, 255)
+                cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
 
                 # Draw a label with a name below the face
-                cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
+                cv2.rectangle(frame, (left, bottom - 35), (right, bottom), box_color, cv2.FILLED)
                 font = cv2.FONT_HERSHEY_DUPLEX
                 cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
 
             # Display the resulting image
-            cv2.imshow('Video', frame)
+            cv2.imshow('Cam from ' + camera_ip, frame)
 
             # Hit 'q' on the keyboard to quit!
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -229,31 +229,33 @@ def main():
         known_face_encodings, known_face_names = load_known_faces()
 
         frame_queue = Queue()
-        processes = []
 
         if args.use_webcam:
             webcam_info = {
                 'user': '',
                 'password': '',
-                'ip': ''
+                'ip': 'webcam'
             }
-            p = Process(target=get_camera_frames, args=(webcam_info, frame_queue, True))
-            p.start()
-            processes.append(p)
+            p1 = Process(target=get_camera_frames, args=(webcam_info, frame_queue, True))
+            p2 = Process(target=recognize_faces, args=(frame_queue, known_face_encodings, known_face_names, 'webcam'))
+            p1.start()
+            p2.start()
+            p1.join()
+            p2.join()
         else:
             camera_list = fetch_data(config.url_facial_api, "/camera/list", headers)
+            processes = []
+
             for camera_info in camera_list:
-                p = Process(target=get_camera_frames, args=(camera_info, frame_queue))
-                p.start()
-                processes.append(p)
+                p1 = Process(target=get_camera_frames, args=(camera_info, frame_queue))
+                p2 = Process(target=recognize_faces, args=(frame_queue, known_face_encodings, known_face_names, camera_info['ip']))
+                p1.start()
+                p2.start()
+                processes.append(p1)
+                processes.append(p2)
 
-        for _ in range(len(processes)):
-            p = Process(target=recognize_faces, args=(frame_queue, known_face_encodings, known_face_names))
-            p.start()
-            processes.append(p)
-
-        for p in processes:
-            p.join()
+            for p in processes:
+                p.join()
 
     except Exception as e:
         logging.error(f"Error: {e}")
